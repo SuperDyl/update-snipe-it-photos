@@ -4,6 +4,7 @@ import os
 from base64 import b64encode
 from pathlib import Path
 import shutil
+from ratelimiter import RateLimiter
 
 API_URL: str = 'https://byu.snipe-it.io/api/v1'
 TOKEN: str = ''
@@ -11,14 +12,15 @@ HEADERS: dict = {'Authorization': f'Bearer {TOKEN}',
                  'Accept': 'application/json',
                  'Content-Type': 'application/json'
                  }
+reqs = RateLimiter(API_URL, time_limit=60, request_limit=120)
 
 
 def get_asset(asset_id: int):
-    return requests.get(API_URL + '/hardware/' + str(asset_id), headers=HEADERS)
+    return reqs.get(API_URL + '/hardware/' + str(asset_id), headers=HEADERS)
 
 
 def get_hardware_by_model(model_id: str) -> requests.Response:
-    return requests.get(API_URL + '/hardware', headers=HEADERS, params={'model_id': model_id})
+    return reqs.get(API_URL + '/hardware', headers=HEADERS, params={'model_id': model_id})
 
 
 def put_image(asset_id: int,
