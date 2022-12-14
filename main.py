@@ -1,5 +1,4 @@
-import _io
-import requests
+from requests import Response, exceptions
 import os
 from base64 import b64encode
 from pathlib import Path
@@ -15,19 +14,23 @@ HEADERS: dict = {'Authorization': f'Bearer {TOKEN}',
 reqs = RateLimiter(API_URL, time_limit=60, request_limit=120)
 
 
-def get_asset(asset_id: int):
-    return reqs.get(API_URL + '/hardware/' + str(asset_id), headers=HEADERS)
+def get_models(model_name: str) -> Response:
+    return reqs.get('/models', headers=HEADERS, params={'search': model_name})
 
 
-def get_hardware_by_model(model_id: str) -> requests.Response:
-    return reqs.get(API_URL + '/hardware', headers=HEADERS, params={'model_id': model_id})
+def get_asset(asset_id: int) -> Response:
+    return reqs.get('/hardware/' + str(asset_id), headers=HEADERS)
+
+
+def get_hardware_by_model(model_id: int) -> Response:
+    return reqs.get('/hardware', headers=HEADERS, params={'model_id': model_id})
 
 
 def put_image(asset_id: int,
               asset_tag: str,
               status_id: int,
               model_id: int,
-              file_path: str) -> requests.Response:
+              file_path: str) -> Response:
     path = Path(file_path)
     img_extension = path.suffix[1:].lower()
     if img_extension == 'jpg':
@@ -36,9 +39,7 @@ def put_image(asset_id: int,
 
     with open(file_path, 'rb') as file:
         img_base64 = b64encode(file.read()).decode()
-
-        print(f"data:image/{img_extension};name={file_name};base64,{img_base64}")
-
+        # print(f"data:image/{img_extension};name={file_name};base64,{img_base64}")
         # print(img_base64[0:20], img_base64[-20:])
 
         request_body = {
@@ -48,13 +49,13 @@ def put_image(asset_id: int,
             "image": f"data:image/{img_extension};name={file_name};base64,{img_base64}"
         }
 
-    return requests.put(
-        API_URL + '/hardware/' + str(asset_id),
+    return reqs.put(
+        '/hardware/' + str(asset_id),
         json=request_body,
         headers=HEADERS)
 
 
-def put_image_as_asset(asset: dict, file) -> requests.Response:
+def put_image_as_asset(asset: dict, file) -> Response:
     return put_image(
         asset['id'],
         asset['asset_tag'],
@@ -64,24 +65,42 @@ def put_image_as_asset(asset: dict, file) -> requests.Response:
     )
 
 
-def post_model_image(model_id: str, file) -> None:
+def post_model_image(model_id: int, file) -> bool:
     # Search for assets with the specified model number
     response = get_hardware_by_model(model_id)
     response.raise_for_status()
 
     assets = response.json()
+    if assets['total'] == 0:
+        return False
 
     # Update each asset with the picture from the specified file
-    for asset in assets:
+    for asset in assets['rows']:
         response = put_image_as_asset(asset, file)
         response.raise_for_status()
 
+    return True
 
-def update_model_image(dir_item: os.DirEntry) -> None:
+
+def update_model_image(dir_item: os.DirEntry) -> bool:
     if not dir_item.is_file():
-        return
+        return False
 
-    post_model_image(dir_item.name, dir_item.path)
+    file_name: str = str(Path(dir_item.name).with_suffix(''))
+    response: Response = get_models(file_name)
+    if not response.ok:
+        print(f'Error finding model for name {file_name}')
+        return False
+
+    search_rows: dict = response.json()
+    if not search_rows:
+        return False
+
+    models: list = search_rows['rows']
+    if not models:
+        return False
+    model_id: int = models[0]['id']
+    return post_model_image(model_id, dir_item.path)
 
 
 def update_model_images(src_dir: str, out_dir: str) -> None:
@@ -89,11 +108,11 @@ def update_model_images(src_dir: str, out_dir: str) -> None:
         item: os.DirEntry
         for item in dir_items:
             try:
-                update_model_image(item)
-            except requests.exceptions.HTTPError:
+                if update_model_image(item):
+                    shutil.move(item, out_dir)
+            except exceptions.HTTPError as error:
                 print(f'Failed to add post images for {item.name}!')
-            else:
-                shutil.move(item, out_dir)
+                print(error)
 
 
 def safe_mkdir(path: str):
